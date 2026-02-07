@@ -1,20 +1,54 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Go NVR Playback</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        .container { display: flex; gap: 20px; }
-        .list { width: 300px; height: 80vh; overflow-y: auto; border: 1px solid #ccc; padding: 10px; }
-        .player { flex: 1; }
-        video { width: 100%; border: 1px solid #000; }
-        .item { padding: 5px; cursor: pointer; border-bottom: 1px solid #eee; }
-        .item:hover { background-color: #f0f0f0; }
-        .item.active { background-color: #e0e0ff; }
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+
+        .list {
+            width: 300px;
+            height: 80vh;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+
+        .player {
+            flex: 1;
+        }
+
+        video {
+            width: 100%;
+            border: 1px solid #000;
+        }
+
+        .item {
+            padding: 5px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+        }
+
+        .item:hover {
+            background-color: #f0f0f0;
+        }
+
+        .item.active {
+            background-color: #e0e0ff;
+        }
     </style>
 </head>
+
 <body>
     <h1>Go NVR Playback</h1>
     <div>
@@ -37,18 +71,18 @@
         // Default to last 24 hours
         const now = new Date();
         const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        
+
         // Format for input type="datetime-local" (YYYY-MM-DDTHH:mm)
         const pad = (n) => n.toString().padStart(2, '0');
-        const formatLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-        
+        const formatLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
         document.getElementById('fromTime').value = formatLocal(yesterday);
         document.getElementById('toTime').value = formatLocal(now);
 
         async function loadRecordings() {
             const from = new Date(document.getElementById('fromTime').value).getTime() / 1000;
             const to = new Date(document.getElementById('toTime').value).getTime() / 1000;
-            
+
             try {
                 const res = await fetch(`/api/recordings?camera=cam1&from=${from}&to=${to}`);
                 const data = await res.json();
@@ -90,5 +124,94 @@
         // Initial load
         loadRecordings();
     </script>
+
+    <!-- Health Badge -->
+    <div id="healthBadge" style="
+      position: fixed;
+      top: 12px; right: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-family: ui-sans-serif, system-ui, -apple-system;
+      font-size: 13px;
+      color: #111;
+      background: #eee;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+      z-index: 9999;
+      min-width: 240px;
+    ">
+        <div style="display:flex;align-items:center;gap:8px;">
+            <span id="healthDot"
+                style="width:10px;height:10px;border-radius:999px;background:#999;display:inline-block;"></span>
+            <strong id="healthTitle">Health: Loading…</strong>
+        </div>
+        <div id="healthDetail" style="margin-top:6px;line-height:1.35;color:#333;">
+            —
+        </div>
+    </div>
+
+    <script>
+        const cameraId = "cam1";
+
+        function bytesToGB(bytes) {
+            if (!Number.isFinite(bytes)) return "-";
+            return (bytes / (1024 ** 3)).toFixed(1);
+        }
+
+        function formatAge(sec) {
+            if (!Number.isFinite(sec)) return "-";
+            const m = Math.floor(sec / 60);
+            const s = sec % 60;
+            return `${m}:${String(s).padStart(2, "0")}`;
+        }
+
+        async function refreshHealth() {
+            const badge = document.getElementById("healthBadge");
+            const dot = document.getElementById("healthDot");
+            const title = document.getElementById("healthTitle");
+            const detail = document.getElementById("healthDetail");
+
+            try {
+                const res = await fetch(`/api/health?camera=${encodeURIComponent(cameraId)}`, { cache: "no-store" });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+
+                const ok = !!data.ok;
+                const last = data.lastSegment || {};
+                const disk = data.disk || {};
+
+                if (ok) {
+                    dot.style.background = "#16a34a"; // green
+                    title.textContent = "Health: Recording ✅";
+                    badge.style.background = "#ecfdf5";
+                } else {
+                    dot.style.background = "#f59e0b"; // amber
+                    title.textContent = "Health: Stale ⚠️";
+                    badge.style.background = "#fffbeb";
+                }
+
+                const file = last.file || "-";
+                const age = formatAge(Number(last.ageSec));
+                const sizeMB = Number.isFinite(last.sizeByte) ? (last.sizeByte / (1024 ** 2)).toFixed(1) : "-";
+                const freeGB = bytesToGB(Number(disk.freeByte));
+                const totalGB = bytesToGB(Number(disk.totalByte));
+
+                detail.innerHTML = `
+            <div><strong>Cam</strong>: ${data.camera || cameraId}</div>
+            <div><strong>Last</strong>: ${file}</div>
+            <div><strong>Age</strong>: ${age} &nbsp; <strong>Size</strong>: ${sizeMB} MB</div>
+            <div><strong>Disk</strong>: ${freeGB} / ${totalGB} GB free</div>
+          `;
+            } catch (e) {
+                dot.style.background = "#dc2626"; // red
+                title.textContent = "Health: API Down ❌";
+                badge.style.background = "#fef2f2";
+                detail.textContent = String(e);
+            }
+        }
+
+        refreshHealth();
+        setInterval(refreshHealth, 3000);
+    </script>
 </body>
+
 </html>
