@@ -1,12 +1,14 @@
 package recorder
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	"nvr/internal/config"
@@ -20,6 +22,17 @@ type Recorder struct {
 	segmentTime int
 	db          *index.DB
 	stopCh      chan struct{}
+
+	// Motion detection
+	motionEnabled   bool
+	motionThreshold float64
+	motionCooldown  int
+	preRecordSecs   int
+
+	mu              sync.Mutex
+	isRecording     bool
+	motionDetector  *MotionDetector
+	recordingCancel context.CancelFunc
 }
 
 // NewRecorder 建立 Recorder
@@ -30,6 +43,21 @@ func NewRecorder(camera config.Camera, dataDir string, segmentTime int, db *inde
 		segmentTime: segmentTime,
 		db:          db,
 		stopCh:      make(chan struct{}),
+	}
+}
+
+// NewMotionRecorder 建立支援動態偵測的 Recorder
+func NewMotionRecorder(camera config.Camera, cfg *config.Config, db *index.DB) *Recorder {
+	return &Recorder{
+		camera:          camera,
+		dataDir:         cfg.DataDir,
+		segmentTime:     cfg.SegmentTime,
+		db:              db,
+		stopCh:          make(chan struct{}),
+		motionEnabled:   cfg.MotionEnabled,
+		motionThreshold: cfg.MotionThreshold,
+		motionCooldown:  cfg.MotionCooldown,
+		preRecordSecs:   cfg.PreRecordSecs,
 	}
 }
 
@@ -44,6 +72,18 @@ func (r *Recorder) Start(reconnectDelay time.Duration) {
 	// 啟動檔案監控
 	go r.watchNewFiles(outDir)
 
+	// 如果啟用動態偵測，使用動態錄影模式
+	if r.motionEnabled {
+		r.startMotionMode(outDir, reconnectDelay)
+		return
+	}
+
+	// 連續錄影模式
+	r.startContinuousMode(outDir, reconnectDelay)
+}
+
+// startContinuousMode 連續錄影模式（原始邏輯）
+func (r *Recorder) startContinuousMode(outDir string, reconnectDelay time.Duration) {
 	for {
 		select {
 		case <-r.stopCh:
@@ -65,14 +105,84 @@ func (r *Recorder) Start(reconnectDelay time.Duration) {
 	}
 }
 
+// startMotionMode 動態偵測錄影模式
+func (r *Recorder) startMotionMode(outDir string, reconnectDelay time.Duration) {
+	log.Printf("[%s] 動態偵測模式啟動 (閾值: %.3f, 冷卻: %ds)", r.camera.ID, r.motionThreshold, r.motionCooldown)
+
+	// 建立動態偵測器
+	r.motionDetector = NewMotionDetector(r.camera.RTSPURL, r.motionThreshold, r.motionCooldown)
+
+	// 設定狀態變更回調
+	r.motionDetector.OnStateChange(func(state MotionState) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+
+		switch state {
+		case MotionDetected:
+			if !r.isRecording {
+				log.Printf("[%s] 動態偵測 → 開始錄影", r.camera.ID)
+				r.isRecording = true
+				ctx, cancel := context.WithCancel(context.Background())
+				r.recordingCancel = cancel
+				go r.runFFmpegWithContext(ctx, outDir)
+			}
+		case MotionIdle:
+			if r.isRecording {
+				log.Printf("[%s] 無動態 → 停止錄影", r.camera.ID)
+				r.isRecording = false
+				if r.recordingCancel != nil {
+					r.recordingCancel()
+				}
+			}
+		}
+	})
+
+	// 啟動動態偵測（會阻塞直到停止或錯誤）
+	for {
+		select {
+		case <-r.stopCh:
+			r.motionDetector.Stop()
+			if r.recordingCancel != nil {
+				r.recordingCancel()
+			}
+			return
+		default:
+		}
+
+		ctx := context.Background()
+		err := r.motionDetector.Start(ctx)
+		if err != nil {
+			log.Printf("[%s] 動態偵測器錯誤: %v", r.camera.ID, err)
+		}
+
+		select {
+		case <-r.stopCh:
+			return
+		case <-time.After(reconnectDelay):
+			log.Printf("[%s] 動態偵測器重新連線...", r.camera.ID)
+		}
+	}
+}
+
 // Stop 停止錄影
 func (r *Recorder) Stop() {
 	close(r.stopCh)
+	if r.motionDetector != nil {
+		r.motionDetector.Stop()
+	}
+	if r.recordingCancel != nil {
+		r.recordingCancel()
+	}
 }
 
-// runFFmpeg 執行 FFmpeg 錄影
-// runFFmpeg 執行 FFmpeg 錄影
+// runFFmpeg 執行 FFmpeg 錄影（無 context）
 func (r *Recorder) runFFmpeg(outDir string) error {
+	ctx := context.Background()
+	return r.runFFmpegWithContext(ctx, outDir)
+}
+
+// runFFmpegWithContext 執行 FFmpeg 錄影（帶 context）
+func (r *Recorder) runFFmpegWithContext(ctx context.Context, outDir string) error {
 	// 檔名格式：20260207_083000.mp4
 	pattern := filepath.Join(outDir, "%Y%m%d_%H%M%S.mp4")
 
@@ -90,7 +200,7 @@ func (r *Recorder) runFFmpeg(outDir string) error {
 		pattern,
 	}
 
-	cmd := exec.Command("/opt/homebrew/bin/ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, "/opt/homebrew/bin/ffmpeg", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -112,6 +222,18 @@ func (r *Recorder) runFFmpeg(outDir string) error {
 			cmd.Process.Kill()
 		}
 		// 等待結束
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			cmd.Process.Kill()
+		}
+		return nil
+	case <-ctx.Done():
+		// Context 取消（動態模式停止錄影）
+		log.Printf("[%s] 錄影 context 取消...", r.camera.ID)
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			cmd.Process.Kill()
+		}
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):

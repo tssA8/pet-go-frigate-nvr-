@@ -77,10 +77,14 @@ func main() {
 	// 啟動每個攝影機的錄影
 	var recorders []*recorder.Recorder
 	for _, cam := range cfg.Cameras {
-		rec := recorder.NewRecorder(cam, cfg.DataDir, cfg.SegmentTime, db)
+		rec := recorder.NewMotionRecorder(cam, cfg, db)
 		recorders = append(recorders, rec)
 		go rec.Start(cfg.ReconnectDelay)
-		log.Printf("攝影機 [%s] 錄影已啟動", cam.ID)
+		if cfg.MotionEnabled {
+			log.Printf("攝影機 [%s] 動態偵測錄影已啟動", cam.ID)
+		} else {
+			log.Printf("攝影機 [%s] 連續錄影已啟動", cam.ID)
+		}
 	}
 
 	// 啟動 API 伺服器
