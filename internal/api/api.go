@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"nvr/internal/index"
 )
@@ -42,11 +44,14 @@ func (s *Server) Start() error {
 	// 播放/下載錄影檔 (串流)
 	mux.HandleFunc("/api/video", s.handleServeVideo)
 
-	// 健康檢查
+	// 簡易健康檢查
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+
+	// 詳細健康狀態 (JSON)
+	mux.HandleFunc("/api/health", s.handleHealth)
 
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("API 伺服器啟動於 http://localhost%s", addr)
@@ -176,4 +181,108 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// handleHealth 詳細健康狀態
+// GET /api/health?camera=cam1
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cameraID := r.URL.Query().Get("camera")
+	if cameraID == "" {
+		cameraID = "cam1" // 預設
+	}
+
+	// 1) 找最新 segment（以檔案為準最可靠）
+	recDir := filepath.Join(s.dataDir, "recordings", cameraID)
+	lastFile, lastMod, lastSize, scanErr := newestMP4(recDir)
+
+	// 2) 磁碟剩餘（本機磁碟，不是 iCloud 配額）
+	freeBytes, totalBytes, diskErr := diskUsage(s.dataDir)
+
+	// 3) 判斷健康：最近 N 秒內有更新檔案且 size > 0
+	// staleAfter = max(3min, segmentTime*3) - 這裡用 3 分鐘（對應 60 秒切檔）
+	const staleAfter = 3 * time.Minute
+
+	now := time.Now()
+	recordingOK := scanErr == nil && lastFile != "" && lastSize > 0 && now.Sub(lastMod) <= staleAfter
+
+	resp := map[string]any{
+		"ok": recordingOK,
+
+		"camera": cameraID,
+		"now":    now.Format(time.RFC3339),
+
+		"recordingsDir": recDir,
+		"lastSegment": map[string]any{
+			"file":     lastFile,
+			"modTime":  lastMod.Format(time.RFC3339),
+			"ageSec":   int64(now.Sub(lastMod).Seconds()),
+			"sizeByte": lastSize,
+		},
+
+		"disk": map[string]any{
+			"freeByte":  freeBytes,
+			"totalByte": totalBytes,
+		},
+	}
+
+	// 附上錯誤（不讓 endpoint 500，方便觀察）
+	if scanErr != nil {
+		resp["scanError"] = scanErr.Error()
+	}
+	if diskErr != nil {
+		resp["diskError"] = diskErr.Error()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func newestMP4(dir string) (name string, modTime time.Time, size int64, err error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", time.Time{}, 0, err
+	}
+
+	var newest time.Time
+	var newestName string
+	var newestSize int64
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if filepath.Ext(e.Name()) != ".mp4" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		mt := info.ModTime()
+		if newestName == "" || mt.After(newest) {
+			newest = mt
+			newestName = e.Name()
+			newestSize = info.Size()
+		}
+	}
+
+	if newestName == "" {
+		return "", time.Time{}, 0, fmt.Errorf("no mp4 found in %s", dir)
+	}
+	return newestName, newest, newestSize, nil
+}
+
+func diskUsage(path string) (freeBytes int64, totalBytes int64, err error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, 0, err
+	}
+	free := int64(st.Bavail) * int64(st.Bsize)
+	total := int64(st.Blocks) * int64(st.Bsize)
+	return free, total, nil
 }

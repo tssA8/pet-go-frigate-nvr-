@@ -90,7 +90,7 @@ func (r *Recorder) runFFmpeg(outDir string) error {
 		pattern,
 	}
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.Command("/opt/homebrew/bin/ffmpeg", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
