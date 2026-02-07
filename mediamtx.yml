@@ -4,7 +4,7 @@
 # HLS 設定
 hlsVariant: lowLatency       # 啟用 Low-Latency HLS (LL-HLS)
 hlsSegmentCount: 3           # 保留的 segment 數量
-hlsSegmentDuration: 2s       # segment 長度 (2秒)
+hlsSegmentDuration: 2s       # segment 長度 (2秒，穩定)
 hlsPartDuration: 250ms       # partial segment 長度 (LL-HLS)
 hlsAlwaysRemux: true         # 確保正確 remux
 
