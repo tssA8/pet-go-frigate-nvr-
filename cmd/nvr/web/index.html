@@ -4,213 +4,161 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Go NVR Playback</title>
+    <title>NVR Live & Playback</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
         body {
-            font-family: sans-serif;
-            margin: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f7;
         }
 
-        .container {
-            display: flex;
-            gap: 20px;
-        }
-
-        .list {
-            width: 300px;
-            height: 80vh;
-            overflow-y: auto;
-            border: 1px solid #ccc;
-            padding: 10px;
-        }
-
-        .player {
-            flex: 1;
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            margin-bottom: 20px;
         }
 
         video {
             width: 100%;
-            border: 1px solid #000;
+            border-radius: 8px;
+            background: #000;
+            aspect-ratio: 16/9;
         }
 
-        .item {
-            padding: 5px;
+        h2 {
+            margin-top: 0;
+        }
+
+        .status {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        button {
+            background: #007aff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
             cursor: pointer;
-            border-bottom: 1px solid #eee;
+            font-size: 14px;
         }
 
-        .item:hover {
-            background-color: #f0f0f0;
-        }
-
-        .item.active {
-            background-color: #e0e0ff;
+        button:hover {
+            background: #0062cc;
         }
     </style>
 </head>
 
 <body>
-    <h1>Go NVR Playback</h1>
-    <div>
-        <label>From: <input type="datetime-local" id="fromTime"></label>
-        <label>To: <input type="datetime-local" id="toTime"></label>
-        <button onclick="loadRecordings()">Search</button>
+    <div class="card">
+        <h2>🔴 Live Stream (HLS)</h2>
+        <div class="status" id="liveStatus">Loading...</div>
+        <video id="liveVideo" controls muted playsinline></video>
+        <div style="margin-top: 10px;">
+            <button onclick="reloadLive()">Reload Stream</button>
+            <span id="liveStats" style="font-size: 12px; margin-left: 10px; font-family: monospace;"></span>
+        </div>
     </div>
-    <br>
-    <div class="container">
-        <div class="list" id="recordingList">
-            <div>Loading...</div>
-        </div>
-        <div class="player">
-            <video id="videoPlayer" controls autoplay></video>
-            <div id="videoInfo"></div>
-        </div>
+
+    <div class="card">
+        <h2>📼 Playback</h2>
+        <div id="recordingList">Loading recordings...</div>
     </div>
 
     <script>
-        // Default to last 24 hours
-        const now = new Date();
-        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const video = document.getElementById('liveVideo');
+        const liveStatus = document.getElementById('liveStatus');
+        const liveStats = document.getElementById('liveStats');
+        let hls;
 
-        // Format for input type="datetime-local" (YYYY-MM-DDTHH:mm)
-        const pad = (n) => n.toString().padStart(2, '0');
-        const formatLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        function initLive() {
+            // Get camera list first to find stream URL
+            fetch('/api/cameras')
+                .then(res => res.json())
+                .then(cams => {
+                    if (cams.length > 0) {
+                        const cam = cams[0];
+                        loadHLS(cam.live.url);
+                    } else {
+                        liveStatus.textContent = "No cameras found";
+                    }
+                })
+                .catch(err => {
+                    liveStatus.textContent = "Error loading cameras: " + err;
+                });
+        }
 
-        document.getElementById('fromTime').value = formatLocal(yesterday);
-        document.getElementById('toTime').value = formatLocal(now);
+        function loadHLS(url) {
+            liveStatus.textContent = "Connecting to: " + url;
 
-        async function loadRecordings() {
-            const from = new Date(document.getElementById('fromTime').value).getTime() / 1000;
-            const to = new Date(document.getElementById('toTime').value).getTime() / 1000;
+            if (Hls.isSupported()) {
+                if (hls) hls.destroy();
 
-            try {
-                const res = await fetch(`/api/recordings?camera=cam1&from=${from}&to=${to}`);
-                const data = await res.json();
-                renderList(data);
-            } catch (e) {
-                console.error(e);
-                document.getElementById('recordingList').innerHTML = 'Error loading recordings';
+                hls = new Hls({
+                    debug: false,
+                    enableWorker: true,
+                    lowLatencyMode: true,
+                    backBufferLength: 90
+                });
+
+                hls.loadSource(url);
+                hls.attachMedia(video);
+
+                hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                    liveStatus.textContent = "Live (HLS.js)";
+                    video.play().catch(e => console.log("Auto-play prevented:", e));
+                });
+
+                hls.on(Hls.Events.ERROR, function (event, data) {
+                    if (data.fatal) {
+                        switch (data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                liveStatus.textContent = "Network error, recovering...";
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                liveStatus.textContent = "Media error, recovering...";
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                hls.destroy();
+                                break;
+                        }
+                    }
+                });
+
+                // Stats
+                setInterval(() => {
+                    if (hls.latency) {
+                        liveStats.textContent = `Latency: ${hls.latency.toFixed(2)}s | Buffer: ${hls.bandwidthEstimate ? (hls.bandwidthEstimate / 1000000).toFixed(2) + ' Mbps' : '-'}`;
+                    }
+                }, 1000);
+
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS (Safari)
+                video.src = url;
+                video.addEventListener('loadedmetadata', function () {
+                    liveStatus.textContent = "Live (Native)";
+                    video.play();
+                });
+            } else {
+                liveStatus.textContent = "HLS not supported in this browser";
             }
         }
 
-        function renderList(recordings) {
-            const listEl = document.getElementById('recordingList');
-            if (!recordings || recordings.length === 0) {
-                listEl.innerHTML = 'No recordings found';
-                return;
-            }
-
-            listEl.innerHTML = '';
-            recordings.forEach(rec => {
-                const div = document.createElement('div');
-                div.className = 'item';
-                const start = new Date(rec.start_ts * 1000).toLocaleString();
-                const dur = rec.end_ts - rec.start_ts;
-                div.innerText = `${start} (${dur}s)`;
-                div.onclick = () => playVideo(rec, div);
-                listEl.appendChild(div);
-            });
+        function reloadLive() {
+            initLive();
         }
 
-        function playVideo(rec, itemEl) {
-            document.querySelectorAll('.item').forEach(i => i.classList.remove('active'));
-            itemEl.classList.add('active');
-
-            const video = document.getElementById('videoPlayer');
-            video.src = rec.url;
-            document.getElementById('videoInfo').innerText = `Playing: ${rec.path}`;
-        }
-
-        // Initial load
-        loadRecordings();
-    </script>
-
-    <!-- Health Badge -->
-    <div id="healthBadge" style="
-      position: fixed;
-      top: 12px; right: 12px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      font-family: ui-sans-serif, system-ui, -apple-system;
-      font-size: 13px;
-      color: #111;
-      background: #eee;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.15);
-      z-index: 9999;
-      min-width: 240px;
-    ">
-        <div style="display:flex;align-items:center;gap:8px;">
-            <span id="healthDot"
-                style="width:10px;height:10px;border-radius:999px;background:#999;display:inline-block;"></span>
-            <strong id="healthTitle">Health: Loading…</strong>
-        </div>
-        <div id="healthDetail" style="margin-top:6px;line-height:1.35;color:#333;">
-            —
-        </div>
-    </div>
-
-    <script>
-        const cameraId = "cam1";
-
-        function bytesToGB(bytes) {
-            if (!Number.isFinite(bytes)) return "-";
-            return (bytes / (1024 ** 3)).toFixed(1);
-        }
-
-        function formatAge(sec) {
-            if (!Number.isFinite(sec)) return "-";
-            const m = Math.floor(sec / 60);
-            const s = sec % 60;
-            return `${m}:${String(s).padStart(2, "0")}`;
-        }
-
-        async function refreshHealth() {
-            const badge = document.getElementById("healthBadge");
-            const dot = document.getElementById("healthDot");
-            const title = document.getElementById("healthTitle");
-            const detail = document.getElementById("healthDetail");
-
-            try {
-                const res = await fetch(`/api/health?camera=${encodeURIComponent(cameraId)}`, { cache: "no-store" });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
-
-                const ok = !!data.ok;
-                const last = data.lastSegment || {};
-                const disk = data.disk || {};
-
-                if (ok) {
-                    dot.style.background = "#16a34a"; // green
-                    title.textContent = "Health: Recording ✅";
-                    badge.style.background = "#ecfdf5";
-                } else {
-                    dot.style.background = "#f59e0b"; // amber
-                    title.textContent = "Health: Stale ⚠️";
-                    badge.style.background = "#fffbeb";
-                }
-
-                const file = last.file || "-";
-                const age = formatAge(Number(last.ageSec));
-                const sizeMB = Number.isFinite(last.sizeByte) ? (last.sizeByte / (1024 ** 2)).toFixed(1) : "-";
-                const freeGB = bytesToGB(Number(disk.freeByte));
-                const totalGB = bytesToGB(Number(disk.totalByte));
-
-                detail.innerHTML = `
-            <div><strong>Cam</strong>: ${data.camera || cameraId}</div>
-            <div><strong>Last</strong>: ${file}</div>
-            <div><strong>Age</strong>: ${age} &nbsp; <strong>Size</strong>: ${sizeMB} MB</div>
-            <div><strong>Disk</strong>: ${freeGB} / ${totalGB} GB free</div>
-          `;
-            } catch (e) {
-                dot.style.background = "#dc2626"; // red
-                title.textContent = "Health: API Down ❌";
-                badge.style.background = "#fef2f2";
-                detail.textContent = String(e);
-            }
-        }
-
-        refreshHealth();
-        setInterval(refreshHealth, 3000);
+        // Init
+        initLive();
     </script>
 </body>
 

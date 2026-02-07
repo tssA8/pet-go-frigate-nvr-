@@ -6,7 +6,7 @@ hls: yes
 hlsAddress: :8888
 
 # HLS 設定 - 使用 fmp4 變體 (比 mpegts 更低延遲，但不需要 TLS)
-hlsVariant: fmp4
+hlsVariant: mpegts
 hlsSegmentCount: 3           # 保留的 segment 數量
 hlsSegmentDuration: 2s       # segment 長度 (2秒)
 hlsAlwaysRemux: true         # 確保一直生成 HLS
