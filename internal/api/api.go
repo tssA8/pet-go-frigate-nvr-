@@ -12,22 +12,29 @@ import (
 	"syscall"
 	"time"
 
+	"nvr/internal/config"
 	"nvr/internal/index"
 )
 
 // Server API 伺服器
 type Server struct {
-	db      *index.DB
-	dataDir string
-	port    int
+	db         *index.DB
+	dataDir    string
+	port       int
+	hlsPort    int
+	publicHost string
+	cameras    []config.Camera
 }
 
 // NewServer 建立 API Server
-func NewServer(db *index.DB, dataDir string, port int) *Server {
+func NewServer(db *index.DB, cfg *config.Config) *Server {
 	return &Server{
-		db:      db,
-		dataDir: dataDir,
-		port:    port,
+		db:         db,
+		dataDir:    cfg.DataDir,
+		port:       cfg.APIPort,
+		hlsPort:    cfg.HLSPort,
+		publicHost: cfg.PublicHost,
+		cameras:    cfg.Cameras,
 	}
 }
 
@@ -52,6 +59,12 @@ func (s *Server) Start() error {
 
 	// 詳細健康狀態 (JSON)
 	mux.HandleFunc("/api/health", s.handleHealth)
+
+	// Live streaming info (HLS URL for iOS)
+	mux.HandleFunc("/api/live", s.handleLive)
+
+	// Camera list (unified for iOS app)
+	mux.HandleFunc("/api/cameras", s.handleCameras)
 
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("API 伺服器啟動於 http://localhost%s", addr)
@@ -285,4 +298,138 @@ func diskUsage(path string) (freeBytes int64, totalBytes int64, err error) {
 	free := int64(st.Bavail) * int64(st.Bsize)
 	total := int64(st.Blocks) * int64(st.Bsize)
 	return free, total, nil
+}
+
+// handleLive 回傳攝影機的 HLS 直播 URL
+// GET /api/live?camera=cam1
+func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cameraID := r.URL.Query().Get("camera")
+	if cameraID == "" {
+		cameraID = "cam1"
+	}
+
+	// 找到對應的攝影機
+	var cam *config.Camera
+	for i := range s.cameras {
+		if s.cameras[i].ID == cameraID {
+			cam = &s.cameras[i]
+			break
+		}
+	}
+
+	if cam == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":  "camera not found",
+			"camera": cameraID,
+		})
+		return
+	}
+
+	// 決定 Host
+	host := s.resolveHost(r)
+
+	// StreamPath 預設為 camera ID 或 "brio"
+	streamPath := cam.StreamPath
+	if streamPath == "" {
+		streamPath = cam.ID
+	}
+
+	hlsURL := fmt.Sprintf("http://%s:%d/%s/index.m3u8", host, s.hlsPort, streamPath)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"camera": cam.ID,
+		"type":   "hls",
+		"url":    hlsURL,
+	})
+}
+
+// handleCameras 回傳所有攝影機清單（給 iOS app 用）
+// GET /api/cameras
+func (s *Server) handleCameras(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	host := s.resolveHost(r)
+
+	type LiveInfo struct {
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	}
+
+	type PlaybackInfo struct {
+		RecordingsEndpoint string `json:"recordingsEndpoint"`
+		VideoEndpoint      string `json:"videoEndpoint"`
+	}
+
+	type CameraInfo struct {
+		ID             string       `json:"id"`
+		Name           string       `json:"name"`
+		Live           LiveInfo     `json:"live"`
+		Playback       PlaybackInfo `json:"playback"`
+		HealthEndpoint string       `json:"healthEndpoint"`
+	}
+
+	result := make([]CameraInfo, 0, len(s.cameras))
+
+	for _, cam := range s.cameras {
+		streamPath := cam.StreamPath
+		if streamPath == "" {
+			streamPath = cam.ID
+		}
+
+		name := cam.Name
+		if name == "" {
+			name = cam.ID
+		}
+
+		hlsURL := fmt.Sprintf("http://%s:%d/%s/index.m3u8", host, s.hlsPort, streamPath)
+
+		result = append(result, CameraInfo{
+			ID:   cam.ID,
+			Name: name,
+			Live: LiveInfo{
+				Type: "hls",
+				URL:  hlsURL,
+			},
+			Playback: PlaybackInfo{
+				RecordingsEndpoint: fmt.Sprintf("/api/recordings?camera=%s&from={unix}&to={unix}", cam.ID),
+				VideoEndpoint:      "/api/video?id={id}",
+			},
+			HealthEndpoint: fmt.Sprintf("/api/health?camera=%s", cam.ID),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// resolveHost 決定回傳 URL 的 host
+func (s *Server) resolveHost(r *http.Request) string {
+	// 1) 優先使用設定的 PublicHost (Tailscale 用)
+	if s.publicHost != "" {
+		return s.publicHost
+	}
+
+	// 2) 從 request Host header 取得（去掉 port）
+	host := r.Host
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+
+	// 3) 如果是空或 localhost，fallback 到 127.0.0.1
+	if host == "" || host == "localhost" {
+		return "127.0.0.1"
+	}
+
+	return host
 }

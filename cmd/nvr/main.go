@@ -28,8 +28,10 @@ func main() {
 	// ============================================
 	cfg.Cameras = []config.Camera{
 		{
-			ID:      "cam1",
-			RTSPURL: "rtsp://127.0.0.1:8554/brio",
+			ID:         "cam1",
+			Name:       "Brio 300",
+			RTSPURL:    "rtsp://127.0.0.1:8554/brio",
+			StreamPath: "brio", // MediaMTX 路徑
 		},
 	}
 
@@ -82,7 +84,7 @@ func main() {
 	}
 
 	// 啟動 API 伺服器
-	apiServer := api.NewServer(db, cfg.DataDir, cfg.APIPort)
+	apiServer := api.NewServer(db, cfg)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Fatalf("API 伺服器錯誤: %v", err)
