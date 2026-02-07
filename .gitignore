@@ -1,0 +1,11 @@
+# Binaries
+nvr
+verify_icloud.go
+
+# Data
+data/
+*.db
+*.log
+
+# OS
+.DS_Store
