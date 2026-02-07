@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"nvr/internal/api"
 	"nvr/internal/config"
 	"nvr/internal/index"
 	"nvr/internal/recorder"
+	"nvr/internal/retention"
 )
 
 func main() {
@@ -47,6 +50,28 @@ func main() {
 
 	log.Println("資料庫初始化完成")
 
+	// Retention 設定 (預設 30 天)
+	if cfg.RetentionDays <= 0 {
+		cfg.RetentionDays = 30
+	}
+
+	// 啟動 Retention Job
+	// 使用獨立的 context 讓它能跟著 main 一起被 cancel
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	retJob := retention.NewJob(
+		&retentionRepoAdapter{db: db}, // adapter defined below
+		cfg.DataDir,
+		cfg.RetentionDays,
+		retention.Options{
+			Interval:   1 * time.Hour,
+			BatchLimit: 200,
+			Logger:     log.Default(),
+		},
+	)
+	go retJob.Start(ctx)
+
 	// 啟動每個攝影機的錄影
 	var recorders []*recorder.Recorder
 	for _, cam := range cfg.Cameras {
@@ -70,6 +95,7 @@ func main() {
 	<-sigCh
 
 	log.Println("收到中斷信號，正在關閉...")
+	cancel() // 停止 retention job
 
 	// 停止所有錄影
 	for _, rec := range recorders {
@@ -77,4 +103,31 @@ func main() {
 	}
 
 	log.Println("NVR 已關閉")
+}
+
+// Adapter to bridge index.DB to retention.Repo
+type retentionRepoAdapter struct {
+	db *index.DB
+}
+
+func (a *retentionRepoAdapter) ListExpiredRecordings(ctx context.Context, cutoffUnix int64, limit int) ([]retention.Recording, error) {
+	items, err := a.db.ListExpiredRecordings(ctx, cutoffUnix, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]retention.Recording, 0, len(items))
+	for _, it := range items {
+		out = append(out, retention.Recording{
+			ID:       it.ID,
+			CameraID: it.CameraID,
+			Path:     it.Path,
+			EndTS:    it.EndTS,
+			Size:     it.Size,
+		})
+	}
+	return out, nil
+}
+
+func (a *retentionRepoAdapter) DeleteRecordingByID(ctx context.Context, id int64) error {
+	return a.db.DeleteRecordingByID(ctx, id)
 }

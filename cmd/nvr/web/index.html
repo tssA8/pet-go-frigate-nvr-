@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go NVR Playback</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .container { display: flex; gap: 20px; }
+        .list { width: 300px; height: 80vh; overflow-y: auto; border: 1px solid #ccc; padding: 10px; }
+        .player { flex: 1; }
+        video { width: 100%; border: 1px solid #000; }
+        .item { padding: 5px; cursor: pointer; border-bottom: 1px solid #eee; }
+        .item:hover { background-color: #f0f0f0; }
+        .item.active { background-color: #e0e0ff; }
+    </style>
+</head>
+<body>
+    <h1>Go NVR Playback</h1>
+    <div>
+        <label>From: <input type="datetime-local" id="fromTime"></label>
+        <label>To: <input type="datetime-local" id="toTime"></label>
+        <button onclick="loadRecordings()">Search</button>
+    </div>
+    <br>
+    <div class="container">
+        <div class="list" id="recordingList">
+            <div>Loading...</div>
+        </div>
+        <div class="player">
+            <video id="videoPlayer" controls autoplay></video>
+            <div id="videoInfo"></div>
+        </div>
+    </div>
+
+    <script>
+        // Default to last 24 hours
+        const now = new Date();
+        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        
+        // Format for input type="datetime-local" (YYYY-MM-DDTHH:mm)
+        const pad = (n) => n.toString().padStart(2, '0');
+        const formatLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        
+        document.getElementById('fromTime').value = formatLocal(yesterday);
+        document.getElementById('toTime').value = formatLocal(now);
+
+        async function loadRecordings() {
+            const from = new Date(document.getElementById('fromTime').value).getTime() / 1000;
+            const to = new Date(document.getElementById('toTime').value).getTime() / 1000;
+            
+            try {
+                const res = await fetch(`/api/recordings?camera=cam1&from=${from}&to=${to}`);
+                const data = await res.json();
+                renderList(data);
+            } catch (e) {
+                console.error(e);
+                document.getElementById('recordingList').innerHTML = 'Error loading recordings';
+            }
+        }
+
+        function renderList(recordings) {
+            const listEl = document.getElementById('recordingList');
+            if (!recordings || recordings.length === 0) {
+                listEl.innerHTML = 'No recordings found';
+                return;
+            }
+
+            listEl.innerHTML = '';
+            recordings.forEach(rec => {
+                const div = document.createElement('div');
+                div.className = 'item';
+                const start = new Date(rec.start_ts * 1000).toLocaleString();
+                const dur = rec.end_ts - rec.start_ts;
+                div.innerText = `${start} (${dur}s)`;
+                div.onclick = () => playVideo(rec, div);
+                listEl.appendChild(div);
+            });
+        }
+
+        function playVideo(rec, itemEl) {
+            document.querySelectorAll('.item').forEach(i => i.classList.remove('active'));
+            itemEl.classList.add('active');
+
+            const video = document.getElementById('videoPlayer');
+            video.src = rec.url;
+            document.getElementById('videoInfo').innerText = `Playing: ${rec.path}`;
+        }
+
+        // Initial load
+        loadRecordings();
+    </script>
+</body>
+</html>

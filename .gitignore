@@ -1,5 +1,7 @@
 # Binaries
-nvr
+# Binaries
+/nvr
+verify_icloud.go
 verify_icloud.go
 
 # Data

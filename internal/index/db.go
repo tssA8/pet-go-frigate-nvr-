@@ -57,10 +57,10 @@ func (db *DB) migrate() error {
 	return err
 }
 
-// InsertRecording 新增一筆錄影記錄
+// InsertRecording 新增一筆錄影記錄（如果已存在則忽略）
 func (db *DB) InsertRecording(rec *Recording) error {
 	result, err := db.conn.Exec(`
-		INSERT INTO recordings (camera_id, start_ts, end_ts, path, size_bytes)
+		INSERT OR IGNORE INTO recordings (camera_id, start_ts, end_ts, path, size_bytes)
 		VALUES (?, ?, ?, ?, ?)
 	`, rec.CameraID, rec.StartTS, rec.EndTS, rec.Path, rec.SizeBytes)
 	if err != nil {
@@ -121,6 +121,24 @@ func (db *DB) DeleteOldRecordings(beforeTS int64) ([]string, error) {
 	}
 
 	return paths, nil
+}
+
+// GetRecordingByID 依 ID 取得錄影記錄
+func (db *DB) GetRecordingByID(id int64) (*Recording, error) {
+	row := db.conn.QueryRow(`
+		SELECT id, camera_id, start_ts, end_ts, path, size_bytes
+		FROM recordings
+		WHERE id = ?
+	`, id)
+
+	var r Recording
+	if err := row.Scan(&r.ID, &r.CameraID, &r.StartTS, &r.EndTS, &r.Path, &r.SizeBytes); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &r, nil
 }
 
 // Close 關閉資料庫連線
