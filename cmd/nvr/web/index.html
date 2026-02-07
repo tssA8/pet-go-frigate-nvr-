@@ -69,7 +69,11 @@
 
     <div class="card">
         <h2>📼 Playback</h2>
-        <div id="recordingList">Loading recordings...</div>
+        <video id="playbackVideo" controls style="width:100%; display:none; margin-bottom:10px;"></video>
+        <div style="margin-bottom: 10px;">
+            <button onclick="loadRecordings()">Refresh Recordings</button>
+        </div>
+        <div id="recordingList" style="max-height: 400px; overflow-y: auto;">Loading recordings...</div>
     </div>
 
     <script>
@@ -157,8 +161,77 @@
             initLive();
         }
 
+        // Playback Logic
+        const recordingList = document.getElementById('recordingList');
+        const playbackVideo = document.getElementById('playbackVideo');
+
+        function loadRecordings() {
+            recordingList.innerHTML = "Loading...";
+
+            // Last 6 hours
+            const now = Math.floor(Date.now() / 1000);
+            const from = now - (6 * 3600);
+
+            // Get camera ID (assuming cam1 for now or get from API)
+            fetch('/api/cameras')
+                .then(res => res.json())
+                .then(cams => {
+                    if (cams.length === 0) return;
+                    const camId = cams[0].id; // Default to first camera
+
+                    fetch(`/api/recordings?camera=${camId}&from=${from}&to=${now}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            renderRecordings(data);
+                        })
+                        .catch(err => {
+                            recordingList.textContent = "Error loading recordings: " + err;
+                        });
+                });
+        }
+
+        function renderRecordings(recordings) {
+            if (!recordings || recordings.length === 0) {
+                recordingList.textContent = "No recordings found in the last 6 hours.";
+                return;
+            }
+
+            // Sort by time desc
+            recordings.sort((a, b) => b.start_ts - a.start_ts);
+
+            let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
+
+            recordings.forEach(rec => {
+                const date = new Date(rec.start_ts * 1000);
+                const timeStr = date.toLocaleString();
+                const duration = rec.end_ts - rec.start_ts;
+                const sizeUser = (rec.size_bytes / 1024 / 1024).toFixed(1) + " MB";
+
+                html += `
+                    <div style="padding: 10px; background: #f0f0f5; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;"
+                         onclick="playRecording('${rec.url}')">
+                        <div>
+                            <div style="font-weight: bold;">${timeStr}</div>
+                            <div style="font-size: 12px; color: #666;">Duration: ${duration}s | Size: ${sizeUser}</div>
+                        </div>
+                        <div style="color: #007aff;">▶️ Play</div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            recordingList.innerHTML = html;
+        }
+
+        function playRecording(url) {
+            playbackVideo.style.display = 'block';
+            playbackVideo.src = url;
+            playbackVideo.play();
+            playbackVideo.scrollIntoView({ behavior: 'smooth' });
+        }
+
         // Init
         initLive();
+        loadRecordings();
     </script>
 </body>
 
