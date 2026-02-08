@@ -141,6 +141,28 @@ func (db *DB) GetRecordingByID(id int64) (*Recording, error) {
 	return &r, nil
 }
 
+// FindRecordingByTimestamp 根據時間戳找到對應的錄影片段
+// ts 為 Unix 秒級時間戳
+func (db *DB) FindRecordingByTimestamp(cameraID string, ts int64) (*Recording, error) {
+	row := db.conn.QueryRow(`
+		SELECT id, camera_id, start_ts, end_ts, path, size_bytes
+		FROM recordings
+		WHERE camera_id = ?
+		  AND start_ts <= ?
+		  AND end_ts > ?
+		LIMIT 1
+	`, cameraID, ts, ts)
+
+	var r Recording
+	if err := row.Scan(&r.ID, &r.CameraID, &r.StartTS, &r.EndTS, &r.Path, &r.SizeBytes); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No recording at this timestamp
+		}
+		return nil, err
+	}
+	return &r, nil
+}
+
 // Close 關閉資料庫連線
 func (db *DB) Close() error {
 	return db.conn.Close()

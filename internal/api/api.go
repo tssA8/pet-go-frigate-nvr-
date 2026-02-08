@@ -66,6 +66,12 @@ func (s *Server) Start() error {
 	// Camera list (unified for iOS app)
 	mux.HandleFunc("/api/cameras", s.handleCameras)
 
+	// Timeline Playback (HomeKit-like scrubbing)
+	mux.HandleFunc("/api/playback", s.handlePlaybackByTimestamp)
+
+	// Timeline Events (for rendering timeline blocks)
+	mux.HandleFunc("/api/events/timeline", s.handleTimelineEvents)
+
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("API 伺服器啟動於 http://localhost%s", addr)
 	return http.ListenAndServe(addr, s.corsMiddleware(mux))
@@ -432,4 +438,135 @@ func (s *Server) resolveHost(r *http.Request) string {
 	}
 
 	return host
+}
+
+// handlePlaybackByTimestamp 根據時間戳查詢對應的錄影片段
+// GET /api/playback?cameraId=cam1&ts=1707361395000
+// ts 為毫秒時間戳
+func (s *Server) handlePlaybackByTimestamp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cameraID := r.URL.Query().Get("cameraId")
+	if cameraID == "" {
+		cameraID = r.URL.Query().Get("camera") // fallback
+	}
+	if cameraID == "" {
+		http.Error(w, "Missing 'cameraId' parameter", http.StatusBadRequest)
+		return
+	}
+
+	tsStr := r.URL.Query().Get("ts")
+	tsMs, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid 'ts' parameter (milliseconds required)", http.StatusBadRequest)
+		return
+	}
+
+	// 轉換為秒（DB 使用秒級時間戳）
+	tsSec := tsMs / 1000
+
+	// 查詢對應的錄影片段
+	rec, err := s.db.FindRecordingByTimestamp(cameraID, tsSec)
+	if err != nil {
+		log.Printf("DB error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if rec == nil {
+		// 該時間點沒有錄影
+		json.NewEncoder(w).Encode(map[string]any{
+			"type":     "gap",
+			"cameraId": cameraID,
+			"ts":       tsMs,
+		})
+		return
+	}
+
+	// 計算 offset（從片段開始到請求時間的偏移）
+	offsetMs := (tsSec - rec.StartTS) * 1000
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"type":           "recording",
+		"recordingId":    rec.ID,
+		"cameraId":       rec.CameraID,
+		"url":            fmt.Sprintf("/api/video?id=%d", rec.ID),
+		"offsetMs":       offsetMs,
+		"segmentStartTs": rec.StartTS * 1000,
+		"segmentEndTs":   rec.EndTS * 1000,
+		"path":           rec.Path,
+	})
+}
+
+// handleTimelineEvents 查詢時間範圍內的事件（輕量 metadata）
+// GET /api/events/timeline?cameraId=cam1&from=1707361300000&to=1707361500000
+func (s *Server) handleTimelineEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cameraID := r.URL.Query().Get("cameraId")
+	if cameraID == "" {
+		cameraID = r.URL.Query().Get("camera")
+	}
+	if cameraID == "" {
+		http.Error(w, "Missing 'cameraId' parameter", http.StatusBadRequest)
+		return
+	}
+
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+
+	fromMs, err := strconv.ParseInt(fromStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid 'from' parameter (milliseconds required)", http.StatusBadRequest)
+		return
+	}
+
+	toMs, err := strconv.ParseInt(toStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid 'to' parameter (milliseconds required)", http.StatusBadRequest)
+		return
+	}
+
+	// 轉換為秒
+	fromSec := fromMs / 1000
+	toSec := toMs / 1000
+
+	// 查詢該時間範圍的錄影（作為 timeline blocks）
+	recordings, err := s.db.QueryRecordings(cameraID, fromSec, toSec)
+	if err != nil {
+		log.Printf("DB error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// 轉換為 timeline 格式
+	type TimelineEvent struct {
+		RecordingID int64  `json:"recordingId"`
+		StartTs     int64  `json:"startTs"`
+		EndTs       int64  `json:"endTs"`
+		Label       string `json:"label,omitempty"`
+		SizeBytes   int64  `json:"sizeBytes"`
+	}
+
+	events := make([]TimelineEvent, len(recordings))
+	for i, rec := range recordings {
+		events[i] = TimelineEvent{
+			RecordingID: rec.ID,
+			StartTs:     rec.StartTS * 1000, // 回傳毫秒
+			EndTs:       rec.EndTS * 1000,
+			Label:       "recording", // 未來可擴充為 Frigate 事件的 label
+			SizeBytes:   rec.SizeBytes,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(events)
 }
