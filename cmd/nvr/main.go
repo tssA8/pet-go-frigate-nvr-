@@ -43,6 +43,9 @@ func main() {
 	// cfg.APIPort = 8080     // API 埠號
 	// ============================================
 
+	// 強制啟用動態偵測 (User request: 沒有事件就不要錄了)
+	cfg.MotionEnabled = true
+
 	// 初始化資料庫
 	db, err := index.NewDB(cfg.DataDir)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -67,7 +68,10 @@ func (m *MotionDetector) Start(ctx context.Context) error {
 
 	cmd := exec.CommandContext(ctx, "/opt/homebrew/bin/ffmpeg", args...)
 
-	stderr, err := cmd.StderrPipe()
+	// Redirect Stderr to os.Stderr for logging
+	cmd.Stderr = os.Stderr
+
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
 	}
@@ -78,7 +82,7 @@ func (m *MotionDetector) Start(ctx context.Context) error {
 
 	// 監控 FFmpeg 輸出
 	go func() {
-		scanner := bufio.NewScanner(stderr)
+		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			line := scanner.Text()
 			// 當偵測到 scene change，FFmpeg 會輸出 metadata

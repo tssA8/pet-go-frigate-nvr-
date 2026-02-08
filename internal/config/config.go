@@ -43,9 +43,9 @@ func DefaultConfig() *Config {
 		ReconnectDelay: 2 * time.Second,
 
 		// Motion Detection 預設值
-		MotionEnabled:   true, // 預設開啟動態偵測
-		MotionThreshold: 0.03, // 中等敏感度
-		MotionCooldown:  15,   // 無動態 15 秒後停止
-		PreRecordSecs:   5,    // 預錄 5 秒
+		MotionEnabled:   true,  // 預設開啟動態偵測
+		MotionThreshold: 0.005, // 極高敏感度 (適用穩定畫面)
+		MotionCooldown:  15,    // 無動態 15 秒後停止
+		PreRecordSecs:   5,     // 預錄 5 秒
 	}
 }
