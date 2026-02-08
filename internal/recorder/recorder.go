@@ -175,6 +175,47 @@ func (r *Recorder) Stop() {
 	}
 }
 
+// TriggerRecording 外部觸發錄影（供 Frigate 使用）
+func (r *Recorder) TriggerRecording() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.isRecording {
+		// 已在錄影中，延長冷卻時間（透過 motion detector 模擬）
+		if r.motionDetector != nil {
+			r.motionDetector.ExtendCooldown()
+		}
+		return
+	}
+
+	// 開始錄影
+	log.Printf("[%s] Frigate 觸發 → 開始錄影", r.camera.ID)
+	r.isRecording = true
+
+	// 建立輸出目錄
+	outDir := filepath.Join(r.dataDir, "recordings", r.camera.ID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	r.recordingCancel = cancel
+	go r.runFFmpegWithContext(ctx, outDir)
+
+	// 設定冷卻計時器（如果沒有 motion detector，自己管理）
+	if r.motionDetector == nil {
+		go func() {
+			time.Sleep(time.Duration(r.motionCooldown) * time.Second)
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.isRecording {
+				log.Printf("[%s] Frigate 冷卻結束 → 停止錄影", r.camera.ID)
+				r.isRecording = false
+				if r.recordingCancel != nil {
+					r.recordingCancel()
+				}
+			}
+		}()
+	}
+}
+
 // runFFmpeg 執行 FFmpeg 錄影（無 context）
 func (r *Recorder) runFFmpeg(outDir string) error {
 	ctx := context.Background()

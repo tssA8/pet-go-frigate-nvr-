@@ -153,3 +153,13 @@ func (m *MotionDetector) IsMotionActive() bool {
 	defer m.mu.Unlock()
 	return m.state == MotionDetected
 }
+
+// ExtendCooldown 延長冷卻時間（外部觸發時使用）
+func (m *MotionDetector) ExtendCooldown() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastMotion = time.Now()
+	if m.state == MotionCooldown {
+		log.Println("[MotionDetector] 冷卻時間已延長")
+	}
+}

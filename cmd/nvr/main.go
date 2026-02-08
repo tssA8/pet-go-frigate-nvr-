@@ -10,6 +10,7 @@ import (
 
 	"nvr/internal/api"
 	"nvr/internal/config"
+	"nvr/internal/frigate"
 	"nvr/internal/index"
 	"nvr/internal/recorder"
 	"nvr/internal/retention"
@@ -43,9 +44,6 @@ func main() {
 	// cfg.APIPort = 8080     // API 埠號
 	// ============================================
 
-	// 強制啟用動態偵測 (User request: 沒有事件就不要錄了)
-	cfg.MotionEnabled = true
-
 	// 初始化資料庫
 	db, err := index.NewDB(cfg.DataDir)
 	if err != nil {
@@ -77,16 +75,42 @@ func main() {
 	)
 	go retJob.Start(ctx)
 
+	// 建立 recorder map 以便 Frigate callback 使用
+	recorderMap := make(map[string]*recorder.Recorder)
+
 	// 啟動每個攝影機的錄影
 	var recorders []*recorder.Recorder
 	for _, cam := range cfg.Cameras {
 		rec := recorder.NewMotionRecorder(cam, cfg, db)
 		recorders = append(recorders, rec)
+		recorderMap[cam.ID] = rec
 		go rec.Start(cfg.ReconnectDelay)
-		if cfg.MotionEnabled {
-			log.Printf("攝影機 [%s] 動態偵測錄影已啟動", cam.ID)
+
+		// 顯示啟動模式
+		if cfg.FrigateEnabled {
+			log.Printf("攝影機 [%s] Frigate AI 偵測模式已啟動", cam.ID)
+		} else if cfg.MotionEnabled {
+			log.Printf("攝影機 [%s] FFmpeg 動態偵測錄影已啟動", cam.ID)
 		} else {
 			log.Printf("攝影機 [%s] 連續錄影已啟動", cam.ID)
+		}
+	}
+
+	// 啟動 Frigate MQTT Subscriber (如果啟用)
+	var frigateSub *frigate.Subscriber
+	if cfg.FrigateEnabled {
+		frigateSub = frigate.NewSubscriber(cfg.MQTTBroker, func(cameraID, label string, startTS, endTS, score float64) {
+			// 找到對應的 recorder 並觸發錄影
+			if rec, ok := recorderMap[cameraID]; ok {
+				log.Printf("[Frigate] 觸發錄影: camera=%s label=%s score=%.2f", cameraID, label, score)
+				rec.TriggerRecording()
+			}
+		})
+		if err := frigateSub.Start(); err != nil {
+			log.Printf("[Frigate] 無法連接 MQTT: %v (將使用 FFmpeg 動態偵測)", err)
+			cfg.MotionEnabled = true // Fallback
+		} else {
+			log.Printf("[Frigate] MQTT 已連接: %s", cfg.MQTTBroker)
 		}
 	}
 

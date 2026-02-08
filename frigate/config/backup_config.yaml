@@ -1,0 +1,28 @@
+mqtt:
+  enabled: true
+  host: mosquitto
+  port: 1883
+  topic_prefix: frigate
+
+cameras:
+  cam1:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://host.docker.internal:8554/brio
+          roles: [detect]
+    detect:
+      enabled: true
+      fps: 5
+
+detectors:
+  cpu1:
+    type: cpu
+
+# Disable recording in Frigate (our NVR handles this)
+record:
+  enabled: false
+
+# Disable snapshots for now
+snapshots:
+  enabled: false

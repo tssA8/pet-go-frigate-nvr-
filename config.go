@@ -28,10 +28,6 @@ type Config struct {
 	MotionThreshold float64 `json:"motion_threshold"` // 動態閾值 (0.01-0.5，越低越敏感)
 	MotionCooldown  int     `json:"motion_cooldown"`  // 無動態後繼續錄影秒數
 	PreRecordSecs   int     `json:"pre_record_secs"`  // 動態前預錄秒數
-
-	// Frigate AI Detection 設定
-	FrigateEnabled bool   `json:"frigate_enabled"` // 啟用 Frigate AI 偵測
-	MQTTBroker     string `json:"mqtt_broker"`     // MQTT Broker 位址 (e.g., "tcp://localhost:1883")
 }
 
 // DefaultConfig 預設設定
@@ -47,13 +43,9 @@ func DefaultConfig() *Config {
 		ReconnectDelay: 2 * time.Second,
 
 		// Motion Detection 預設值
-		MotionEnabled:   false, // 預設關閉 (改用 Frigate)
-		MotionThreshold: 0.005, // 極高敏感度 (適用穩定畫面)
-		MotionCooldown:  15,    // 無動態 15 秒後停止
-		PreRecordSecs:   5,     // 預錄 5 秒
-
-		// Frigate 預設值
-		FrigateEnabled: true,                   // 預設啟用 Frigate
-		MQTTBroker:     "tcp://localhost:1883", // 本地 Mosquitto
+		MotionEnabled:   true, // 預設開啟動態偵測
+		MotionThreshold: 0.03, // 中等敏感度
+		MotionCooldown:  15,   // 無動態 15 秒後停止
+		PreRecordSecs:   5,    // 預錄 5 秒
 	}
 }
