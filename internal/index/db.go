@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -52,6 +53,25 @@ func (db *DB) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_recordings_camera_time 
 		ON recordings(camera_id, start_ts, end_ts);
+
+	-- Frigate AI detection events
+	CREATE TABLE IF NOT EXISTS events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_id TEXT NOT NULL,
+		camera_id TEXT NOT NULL,
+		label TEXT NOT NULL,
+		score REAL,
+		start_ts INTEGER NOT NULL,
+		end_ts INTEGER,
+		created_at INTEGER NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_events_camera_time 
+		ON events(camera_id, start_ts);
+	CREATE INDEX IF NOT EXISTS idx_events_label_time 
+		ON events(label, start_ts);
+	CREATE UNIQUE INDEX IF NOT EXISTS uniq_events_event_id 
+		ON events(event_id);
 	`
 	_, err := db.conn.Exec(schema)
 	return err
@@ -161,6 +181,74 @@ func (db *DB) FindRecordingByTimestamp(cameraID string, ts int64) (*Recording, e
 		return nil, err
 	}
 	return &r, nil
+}
+
+// Event represents a Frigate AI detection event
+type Event struct {
+	ID        int64
+	EventID   string
+	CameraID  string
+	Label     string
+	Score     float64
+	StartTS   int64
+	EndTS     *int64
+	CreatedAt int64
+}
+
+// InsertEvent 新增一筆事件記錄（如果已存在則忽略）
+func (db *DB) InsertEvent(e *Event) error {
+	result, err := db.conn.Exec(`
+		INSERT OR IGNORE INTO events (event_id, camera_id, label, score, start_ts, end_ts, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, e.EventID, e.CameraID, e.Label, e.Score, e.StartTS, e.EndTS, e.CreatedAt)
+	if err != nil {
+		return err
+	}
+	e.ID, _ = result.LastInsertId()
+	return nil
+}
+
+// QueryEvents 查詢某攝影機某時間區間的事件
+func (db *DB) QueryEvents(cameraID string, fromTS, toTS int64, labels []string) ([]Event, error) {
+	query := `
+		SELECT id, event_id, camera_id, label, IFNULL(score, 0), start_ts, end_ts, created_at
+		FROM events
+		WHERE camera_id = ?
+		  AND start_ts >= ?
+		  AND start_ts <= ?
+	`
+	args := []any{cameraID, fromTS, toTS}
+
+	if len(labels) > 0 {
+		placeholders := make([]string, len(labels))
+		for i := range labels {
+			placeholders[i] = "?"
+			args = append(args, labels[i])
+		}
+		query += " AND label IN (" + strings.Join(placeholders, ",") + ")"
+	}
+
+	query += " ORDER BY start_ts DESC LIMIT 500"
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		var endTS sql.NullInt64
+		if err := rows.Scan(&e.ID, &e.EventID, &e.CameraID, &e.Label, &e.Score, &e.StartTS, &endTS, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		if endTS.Valid {
+			e.EndTS = &endTS.Int64
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }
 
 // Close 關閉資料庫連線

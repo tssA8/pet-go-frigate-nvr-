@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"nvr/internal/index"
+
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
@@ -14,6 +16,7 @@ type Subscriber struct {
 	broker   string
 	client   mqtt.Client
 	callback EventCallback
+	db       *index.DB
 
 	// Deduplication: LRU cache with TTL
 	mu         sync.Mutex
@@ -23,10 +26,11 @@ type Subscriber struct {
 }
 
 // NewSubscriber creates a new Frigate MQTT subscriber
-func NewSubscriber(broker string, callback EventCallback) *Subscriber {
+func NewSubscriber(broker string, db *index.DB, callback EventCallback) *Subscriber {
 	s := &Subscriber{
 		broker:     broker,
 		callback:   callback,
+		db:         db,
 		seenEvents: make(map[string]time.Time),
 		dedupeTTL:  10 * time.Minute, // Events older than 10 min can be reprocessed
 		debugMode:  true,             // Enable debug logging
@@ -156,16 +160,59 @@ func (s *Subscriber) handleReview(c mqtt.Client, m mqtt.Message) {
 		ev.After.ID, ev.After.Camera, label, ev.After.Data.TopScore,
 		ev.After.StartTime, ev.After.EndTime)
 
-	// Trigger callback
+	// Map Frigate camera name to NVR camera ID
+	cameraID := mapFrigateCameraToNVR(ev.After.Camera)
+
+	// Write event to database
+	if s.db != nil {
+		startTS := int64(ev.After.StartTime)
+		var endTS *int64
+		if ev.After.EndTime > 0 {
+			v := int64(ev.After.EndTime)
+			endTS = &v
+		}
+
+		event := &index.Event{
+			EventID:   ev.After.ID,
+			CameraID:  cameraID,
+			Label:     label,
+			Score:     ev.After.Data.TopScore,
+			StartTS:   startTS,
+			EndTS:     endTS,
+			CreatedAt: time.Now().Unix(),
+		}
+
+		if err := s.db.InsertEvent(event); err != nil {
+			log.Printf("[Frigate] Failed to insert event: %v", err)
+		} else {
+			log.Printf("[Frigate] ✓ Event saved to DB: id=%s label=%s", ev.After.ID, label)
+		}
+	}
+
+	// Trigger callback (for recording)
 	if s.callback != nil {
 		s.callback(
-			ev.After.Camera,
+			cameraID,
 			label,
 			ev.After.StartTime,
 			ev.After.EndTime,
 			ev.After.Data.TopScore,
 		)
 	}
+}
+
+// mapFrigateCameraToNVR converts Frigate camera name to NVR camera ID
+func mapFrigateCameraToNVR(frigateCam string) string {
+	// Map Frigate camera names to NVR camera IDs
+	mapping := map[string]string{
+		"brio_300": "cam1",
+		"brio300":  "cam1",
+		"cam1":     "cam1",
+	}
+	if nvrCam, ok := mapping[frigateCam]; ok {
+		return nvrCam
+	}
+	return frigateCam
 }
 
 // Stop disconnects from MQTT

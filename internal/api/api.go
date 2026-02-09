@@ -72,6 +72,9 @@ func (s *Server) Start() error {
 	// Timeline Events (for rendering timeline blocks)
 	mux.HandleFunc("/api/events/timeline", s.handleTimelineEvents)
 
+	// Frigate AI detection events (person/cat/car)
+	mux.HandleFunc("/api/events", s.handleGetEvents)
+
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("API 伺服器啟動於 http://localhost%s", addr)
 	return http.ListenAndServe(addr, s.corsMiddleware(mux))
@@ -569,4 +572,82 @@ func (s *Server) handleTimelineEvents(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(events)
+}
+
+// handleGetEvents 查詢 Frigate AI 偵測事件
+// GET /api/events?camera=cam1&from=UNIX&to=UNIX&labels=person,cat
+func (s *Server) handleGetEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	q := r.URL.Query()
+	cameraID := q.Get("camera")
+	if cameraID == "" {
+		cameraID = q.Get("cameraId") // fallback
+	}
+	if cameraID == "" {
+		http.Error(w, "Missing 'camera' parameter", http.StatusBadRequest)
+		return
+	}
+
+	fromStr := q.Get("from")
+	toStr := q.Get("to")
+	labelsStr := q.Get("labels")
+
+	fromTS, err := strconv.ParseInt(fromStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid 'from' parameter (Unix timestamp required)", http.StatusBadRequest)
+		return
+	}
+
+	toTS, err := strconv.ParseInt(toStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid 'to' parameter (Unix timestamp required)", http.StatusBadRequest)
+		return
+	}
+
+	// Parse labels filter
+	var labels []string
+	if labelsStr != "" {
+		for _, l := range strings.Split(labelsStr, ",") {
+			l = strings.TrimSpace(l)
+			if l != "" {
+				labels = append(labels, l)
+			}
+		}
+	}
+
+	events, err := s.db.QueryEvents(cameraID, fromTS, toTS, labels)
+	if err != nil {
+		log.Printf("QueryEvents error: %v", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to JSON-friendly format
+	type EventDTO struct {
+		EventID  string  `json:"event_id"`
+		CameraID string  `json:"camera_id"`
+		Label    string  `json:"label"`
+		Score    float64 `json:"score"`
+		StartTs  int64   `json:"start_ts"`
+		EndTs    *int64  `json:"end_ts,omitempty"`
+	}
+
+	result := make([]EventDTO, len(events))
+	for i, e := range events {
+		result[i] = EventDTO{
+			EventID:  e.EventID,
+			CameraID: e.CameraID,
+			Label:    e.Label,
+			Score:    e.Score,
+			StartTs:  e.StartTS,
+			EndTs:    e.EndTS,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

@@ -99,7 +99,7 @@ func main() {
 	// 啟動 Frigate MQTT Subscriber (如果啟用)
 	var frigateSub *frigate.Subscriber
 	if cfg.FrigateEnabled {
-		frigateSub = frigate.NewSubscriber(cfg.MQTTBroker, func(cameraID, label string, startTS, endTS, score float64) {
+		frigateSub = frigate.NewSubscriber(cfg.MQTTBroker, db, func(cameraID, label string, startTS, endTS, score float64) {
 			// 找到對應的 recorder 並觸發錄影
 			if rec, ok := recorderMap[cameraID]; ok {
 				log.Printf("[Frigate] 觸發錄影: camera=%s label=%s score=%.2f", cameraID, label, score)
