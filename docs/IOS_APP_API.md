@@ -5,22 +5,45 @@
 
 ---
 
+## ⚠️ 時間單位規則
+
+| Endpoint | 時間單位 |
+|----------|---------|
+| `/api/recordings` | **Unix seconds** |
+| `/api/events` | **Unix seconds** |
+| `/api/playback` | **milliseconds** |
+| `/api/timeline` | **milliseconds** |
+
+```swift
+// Swift 轉換
+let unixSec = Int64(Date().timeIntervalSince1970)          // seconds
+let tsMs = Int64(Date().timeIntervalSince1970 * 1000)      // milliseconds
+```
+
+---
+
 ## Quick Start
 
 ```swift
 let baseURL = "http://192.168.1.x:8080"  // or Tailscale IP
 
 // 1. Get camera list
-let cameras = try await fetch("\(baseURL)/api/cameras")
+let camerasURL = URL(string: "\(baseURL)/api/cameras")!
+let cameras = try await fetch(camerasURL)
 
 // 2. Live stream (HLS)
-let liveURL = cameras[0].live.url  // e.g. http://host:8888/brio/index.m3u8
+let hlsURL = URL(string: cameras[0].live.url)!
+let player = AVPlayer(url: hlsURL)
 
-// 3. Timeline scrubbing
-let segment = try await fetch("\(baseURL)/api/playback?cameraId=cam1&ts=\(timestampMs)")
+// 3. Timeline scrubbing (timestamp in MILLISECONDS)
+let tsMs = Int64(Date().timeIntervalSince1970 * 1000)
+let playbackURL = URL(string: "\(baseURL)/api/playback?camera=cam1&ts=\(tsMs)")!
+let segment = try await fetch(playbackURL)
 
-// 4. AI events (person/cat)
-let events = try await fetch("\(baseURL)/api/events?camera=cam1&from=\(from)&to=\(to)")
+// 4. AI events (timestamp in SECONDS)
+let now = Int64(Date().timeIntervalSince1970)
+let eventsURL = URL(string: "\(baseURL)/api/events?camera=cam1&from=\(now - 3600)&to=\(now)")!
+let events = try await fetch(eventsURL)
 ```
 
 ---
@@ -44,7 +67,7 @@ GET /api/cameras
       "url": "http://192.168.1.x:8888/brio/index.m3u8"
     },
     "playback": {
-      "recordingsEndpoint": "/api/recordings?camera=cam1&from={unix}&to={unix}",
+      "recordingsEndpoint": "/api/recordings?camera=cam1&from={seconds}&to={seconds}",
       "videoEndpoint": "/api/video?id={id}"
     },
     "healthEndpoint": "/api/health?camera=cam1"
@@ -71,8 +94,11 @@ GET /api/live?camera=cam1
 
 **Usage (AVPlayer)**
 ```swift
-let player = AVPlayer(url: URL(string: liveResponse.url)!)
+let url = URL(string: liveResponse.url)!
+let player = AVPlayer(url: url)
 ```
+
+> ⚠️ **HLS 404 問題排查**：若回 404，通常是 ffmpeg push 沒跑 / stream 尚未建立 / path 不存在。若是 timeout 才是防火牆/路由問題。
 
 ---
 
@@ -81,24 +107,24 @@ let player = AVPlayer(url: URL(string: liveResponse.url)!)
 > HomeKit-like scrubbing: given a timestamp, get the video segment + offset
 
 ```http
-GET /api/playback?cameraId=cam1&ts=1770520800000
+GET /api/playback?camera=cam1&ts=1770520800000
 ```
 
-| Param | Type | Description |
-|-------|------|-------------|
-| cameraId | string | Camera ID |
-| ts | int64 | Timestamp in **milliseconds** |
+| Param | Type | Unit | Description |
+|-------|------|------|-------------|
+| camera | string | - | Camera ID |
+| ts | int64 | **milliseconds** | Timestamp |
 
 **Response (recording exists)**
 ```json
 {
   "type": "recording",
-  "recordingId": 4682,
-  "cameraId": "cam1",
+  "recording_id": 4682,
+  "camera_id": "cam1",
   "url": "/api/video?id=4682",
-  "offsetMs": 16000,
-  "segmentStartTs": 1770520784000,
-  "segmentEndTs": 1770520844000,
+  "offset_ms": 16000,
+  "segment_start_ts": 1770520784000,
+  "segment_end_ts": 1770520844000,
   "path": "recordings/cam1/20260208_111944.mp4"
 }
 ```
@@ -107,17 +133,28 @@ GET /api/playback?cameraId=cam1&ts=1770520800000
 ```json
 {
   "type": "gap",
-  "cameraId": "cam1",
+  "camera_id": "cam1",
   "ts": 1770520800000
 }
 ```
 
 **Usage**
 ```swift
-let response = try await fetch("/api/playback?cameraId=cam1&ts=\(timestampMs)")
-if response.type == "recording" {
-    let player = AVPlayer(url: URL(string: baseURL + response.url)!)
-    player.seek(to: CMTime(value: response.offsetMs, timescale: 1000))
+let tsMs = Int64(Date().timeIntervalSince1970 * 1000)
+let url = URL(string: "\(baseURL)/api/playback?camera=cam1&ts=\(tsMs)")!
+let response = try await fetch(url)
+
+if response.type == "recording", let urlPath = response.url {
+    // 若 url 以 http 開頭 → 直接用，否則 → baseURL + url
+    let videoURL = urlPath.hasPrefix("http") 
+        ? URL(string: urlPath)! 
+        : URL(string: "\(baseURL)\(urlPath)")!
+    let player = AVPlayer(url: videoURL)
+    
+    // Seek to offset
+    let offsetSec = Double(response.offsetMs ?? 0) / 1000.0
+    player.seek(to: CMTime(seconds: offsetSec, preferredTimescale: 600))
+    player.play()
 }
 ```
 
@@ -128,24 +165,24 @@ if response.type == "recording" {
 > Get all recording segments in a time range (for rendering timeline UI)
 
 ```http
-GET /api/events/timeline?cameraId=cam1&from=1770520000000&to=1770524000000
+GET /api/timeline?camera=cam1&from=1770520000000&to=1770524000000
 ```
 
-| Param | Type | Description |
-|-------|------|-------------|
-| cameraId | string | Camera ID |
-| from | int64 | Start timestamp (ms) |
-| to | int64 | End timestamp (ms) |
+| Param | Type | Unit | Description |
+|-------|------|------|-------------|
+| camera | string | - | Camera ID |
+| from | int64 | **milliseconds** | Start timestamp |
+| to | int64 | **milliseconds** | End timestamp |
 
 **Response**
 ```json
 [
   {
-    "recordingId": 4682,
-    "startTs": 1770520784000,
-    "endTs": 1770520844000,
+    "recording_id": 4682,
+    "start_ts": 1770520784000,
+    "end_ts": 1770520844000,
     "label": "recording",
-    "sizeBytes": 15087987
+    "size_bytes": 15087987
   }
 ]
 ```
@@ -157,15 +194,15 @@ GET /api/events/timeline?cameraId=cam1&from=1770520000000&to=1770524000000
 > Query Frigate AI detection events
 
 ```http
-GET /api/events?camera=cam1&from=0&to=9999999999&labels=person,cat
+GET /api/events?camera=cam1&from=1707280800&to=1707284400&labels=person,cat
 ```
 
-| Param | Type | Description |
-|-------|------|-------------|
-| camera | string | Camera ID |
-| from | int64 | Start timestamp (Unix seconds) |
-| to | int64 | End timestamp (Unix seconds) |
-| labels | string | Optional: comma-separated labels filter |
+| Param | Type | Unit | Description |
+|-------|------|------|-------------|
+| camera | string | - | Camera ID |
+| from | int64 | **seconds** | Start timestamp |
+| to | int64 | **seconds** | End timestamp |
+| labels | string | - | Optional: comma-separated filter |
 
 **Response**
 ```json
@@ -197,22 +234,22 @@ GET /api/events?camera=cam1&from=0&to=9999999999&labels=person,cat
 GET /api/recordings?camera=cam1&from=1707280800&to=1707284400
 ```
 
-| Param | Type | Description |
-|-------|------|-------------|
-| camera | string | Camera ID |
-| from | int64 | Start timestamp (Unix seconds) |
-| to | int64 | End timestamp (Unix seconds) |
+| Param | Type | Unit |
+|-------|------|------|
+| camera | string | - |
+| from | int64 | **seconds** |
+| to | int64 | **seconds** |
 
 **Response**
 ```json
 [
   {
-    "ID": 4682,
-    "CameraID": "cam1",
-    "StartTS": 1707280800,
-    "EndTS": 1707280860,
-    "Path": "recordings/cam1/20260207_120000.mp4",
-    "SizeBytes": 15087987,
+    "id": 4682,
+    "camera_id": "cam1",
+    "start_ts": 1707280800,
+    "end_ts": 1707280860,
+    "path": "recordings/cam1/20260207_120000.mp4",
+    "size_bytes": 15087987,
     "url": "/api/video?id=4682"
   }
 ]
@@ -244,15 +281,15 @@ GET /api/health?camera=cam1
   "ok": true,
   "camera": "cam1",
   "now": "2026-02-09T16:00:00+08:00",
-  "lastSegment": {
+  "last_segment": {
     "file": "20260209_160000.mp4",
-    "modTime": "2026-02-09T16:00:50+08:00",
-    "ageSec": 10,
-    "sizeByte": 12000000
+    "mod_time": "2026-02-09T16:00:50+08:00",
+    "age_sec": 10,
+    "size_bytes": 12000000
   },
   "disk": {
-    "freeByte": 500000000000,
-    "totalByte": 1000000000000
+    "free_bytes": 500000000000,
+    "total_bytes": 1000000000000
   }
 }
 ```
@@ -262,7 +299,7 @@ GET /api/health?camera=cam1
 ## Data Models (Swift)
 
 ```swift
-// Camera
+// MARK: - Camera
 struct Camera: Codable {
     let id: String
     let name: String
@@ -281,7 +318,7 @@ struct PlaybackInfo: Codable {
     let videoEndpoint: String
 }
 
-// Playback Response
+// MARK: - Playback Response
 struct PlaybackResponse: Codable {
     let type: String  // "recording" | "gap"
     let recordingId: Int64?
@@ -290,13 +327,25 @@ struct PlaybackResponse: Codable {
     let offsetMs: Int64?
     let segmentStartTs: Int64?
     let segmentEndTs: Int64?
+    let path: String?  // ✅ 錄影檔案路徑
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case recordingId = "recording_id"
+        case cameraId = "camera_id"
+        case url
+        case offsetMs = "offset_ms"
+        case segmentStartTs = "segment_start_ts"
+        case segmentEndTs = "segment_end_ts"
+        case path
+    }
 }
 
-// AI Event
+// MARK: - AI Event
 struct AIEvent: Codable {
     let eventId: String
     let cameraId: String
-    let label: String  // "person", "cat", etc.
+    let label: String
     let score: Double
     let startTs: Int64
     let endTs: Int64?
@@ -310,13 +359,80 @@ struct AIEvent: Codable {
     }
 }
 
-// Timeline Block
+// MARK: - Timeline Block
 struct TimelineBlock: Codable {
     let recordingId: Int64
     let startTs: Int64
     let endTs: Int64
     let label: String
+    let sizeBytes: Int64?  // ✅ optional，避免部分 segment 沒有此欄位時 decode 失敗
+    
+    enum CodingKeys: String, CodingKey {
+        case recordingId = "recording_id"
+        case startTs = "start_ts"
+        case endTs = "end_ts"
+        case label
+        case sizeBytes = "size_bytes"
+    }
+}
+
+// MARK: - Recording
+struct Recording: Codable {
+    let id: Int64
+    let cameraId: String
+    let startTs: Int64
+    let endTs: Int64
+    let path: String
     let sizeBytes: Int64
+    let url: String
+    
+    enum CodingKeys: String, CodingKey {
+        case id
+        case cameraId = "camera_id"
+        case startTs = "start_ts"
+        case endTs = "end_ts"
+        case path
+        case sizeBytes = "size_bytes"
+        case url
+    }
+}
+
+// MARK: - Health Response
+struct HealthResponse: Codable {
+    let ok: Bool
+    let camera: String
+    let now: String
+    let lastSegment: LastSegment?
+    let disk: Disk
+    
+    enum CodingKeys: String, CodingKey {
+        case ok, camera, now, disk
+        case lastSegment = "last_segment"
+    }
+    
+    struct LastSegment: Codable {
+        let file: String
+        let modTime: String
+        let ageSec: Int64
+        let sizeBytes: Int64
+        
+        enum CodingKeys: String, CodingKey {
+            case file
+            case modTime = "mod_time"
+            case ageSec = "age_sec"
+            case sizeBytes = "size_bytes"
+        }
+    }
+    
+    struct Disk: Codable {
+        let freeBytes: Int64
+        let totalBytes: Int64
+        
+        enum CodingKeys: String, CodingKey {
+            case freeBytes = "free_bytes"
+            case totalBytes = "total_bytes"
+        }
+    }
 }
 ```
 
@@ -336,9 +452,9 @@ struct TimelineBlock: Codable {
 ```
 
 **Implementation**:
-1. Fetch `/api/events/timeline` for recording blocks (gray bars)
-2. Fetch `/api/events` for AI events (icons)
-3. On scrub → call `/api/playback?ts=...` → play URL at offsetMs
+1. Fetch `/api/timeline` for recording blocks (gray bars) — **milliseconds**
+2. Fetch `/api/events` for AI events (icons) — **seconds**
+3. On scrub → call `/api/playback?ts=...` → play URL at offset
 
 ### 2. Live View
 
@@ -352,20 +468,45 @@ playerVC.player = player
 player.play()
 ```
 
-### 3. Event Notifications
+### 3. Event Polling (前台限定)
+
+> ⚠️ iOS 背景時 Timer 會被停掉。MVP 階段建議只在前台輪詢，背景通知需 APNs。
 
 ```swift
-// Poll every 30 seconds for new events
-Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-    let from = Int64(Date().timeIntervalSince1970) - 60
-    let to = Int64(Date().timeIntervalSince1970)
-    let events = try await fetch("/api/events?camera=cam1&from=\(from)&to=\(to)")
+// 前台輪詢：每 30 秒檢查新事件
+func startPolling() {
+    Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        guard UIApplication.shared.applicationState == .active else { return }
+        Task { await self?.checkNewEvents() }
+    }
+}
+
+func checkNewEvents() async {
+    let now = Int64(Date().timeIntervalSince1970)
+    let url = URL(string: "\(baseURL)/api/events?camera=cam1&from=\(now - 60)&to=\(now)")!
     
-    for event in events where event.label == "person" {
-        sendNotification("Person detected at camera")
+    let events = try? await fetch(url)
+    for event in events ?? [] where event.label == "person" {
+        // 顯示本機通知（僅前台/通知中心）
+        showLocalNotification("Person detected")
     }
 }
 ```
+
+---
+
+## Network Configuration
+
+| Service | Port | Protocol | Access |
+|---------|------|----------|--------|
+| NVR API | 8080 | HTTP | Tailscale / LAN |
+| HLS Stream | 8888 | HTTP | Tailscale / LAN |
+| RTSP | 8554 | RTSP | LAN only |
+| Frigate UI | 5000 | HTTP | LAN only |
+
+**Remote Access**: Use Tailscale VPN
+
+> ⚠️ **HLS 404 排查**：回 404 通常是 ffmpeg push 沒跑 / stream path 不存在，不是連線問題。Timeout 才是防火牆/路由問題。
 
 ---
 
@@ -389,16 +530,3 @@ Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
 │  :8554 RTSP    │  SQLite          │  (Docker)        │
 └───────────────────────────────────────────────────────┘
 ```
-
----
-
-## Network Configuration
-
-| Service | Port | Protocol | Access |
-|---------|------|----------|--------|
-| NVR API | 8080 | HTTP | Tailscale / LAN |
-| HLS Stream | 8888 | HTTP | Tailscale / LAN |
-| RTSP | 8554 | RTSP | LAN only |
-| Frigate UI | 5000 | HTTP | LAN only |
-
-**Remote Access**: Use Tailscale VPN

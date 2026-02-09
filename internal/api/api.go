@@ -69,8 +69,8 @@ func (s *Server) Start() error {
 	// Timeline Playback (HomeKit-like scrubbing)
 	mux.HandleFunc("/api/playback", s.handlePlaybackByTimestamp)
 
-	// Timeline Events (for rendering timeline blocks)
-	mux.HandleFunc("/api/events/timeline", s.handleTimelineEvents)
+	// Timeline blocks (recording segments for UI)
+	mux.HandleFunc("/api/timeline", s.handleTimelineEvents)
 
 	// Frigate AI detection events (person/cat/car)
 	mux.HandleFunc("/api/events", s.handleGetEvents)
@@ -452,12 +452,12 @@ func (s *Server) handlePlaybackByTimestamp(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	cameraID := r.URL.Query().Get("cameraId")
+	cameraID := r.URL.Query().Get("camera")
 	if cameraID == "" {
-		cameraID = r.URL.Query().Get("camera") // fallback
+		cameraID = r.URL.Query().Get("cameraId") // fallback for compatibility
 	}
 	if cameraID == "" {
-		http.Error(w, "Missing 'cameraId' parameter", http.StatusBadRequest)
+		http.Error(w, "Missing 'camera' parameter", http.StatusBadRequest)
 		return
 	}
 
@@ -484,9 +484,9 @@ func (s *Server) handlePlaybackByTimestamp(w http.ResponseWriter, r *http.Reques
 	if rec == nil {
 		// 該時間點沒有錄影
 		json.NewEncoder(w).Encode(map[string]any{
-			"type":     "gap",
-			"cameraId": cameraID,
-			"ts":       tsMs,
+			"type":      "gap",
+			"camera_id": cameraID,
+			"ts":        tsMs,
 		})
 		return
 	}
@@ -495,31 +495,31 @@ func (s *Server) handlePlaybackByTimestamp(w http.ResponseWriter, r *http.Reques
 	offsetMs := (tsSec - rec.StartTS) * 1000
 
 	json.NewEncoder(w).Encode(map[string]any{
-		"type":           "recording",
-		"recordingId":    rec.ID,
-		"cameraId":       rec.CameraID,
-		"url":            fmt.Sprintf("/api/video?id=%d", rec.ID),
-		"offsetMs":       offsetMs,
-		"segmentStartTs": rec.StartTS * 1000,
-		"segmentEndTs":   rec.EndTS * 1000,
-		"path":           rec.Path,
+		"type":             "recording",
+		"recording_id":     rec.ID,
+		"camera_id":        rec.CameraID,
+		"url":              fmt.Sprintf("/api/video?id=%d", rec.ID),
+		"offset_ms":        offsetMs,
+		"segment_start_ts": rec.StartTS * 1000,
+		"segment_end_ts":   rec.EndTS * 1000,
+		"path":             rec.Path,
 	})
 }
 
-// handleTimelineEvents 查詢時間範圍內的事件（輕量 metadata）
-// GET /api/events/timeline?cameraId=cam1&from=1707361300000&to=1707361500000
+// handleTimelineEvents 查詢時間範圍內的錄影片段（for timeline UI）
+// GET /api/timeline?camera=cam1&from=1707361300000&to=1707361500000
 func (s *Server) handleTimelineEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	cameraID := r.URL.Query().Get("cameraId")
+	cameraID := r.URL.Query().Get("camera")
 	if cameraID == "" {
-		cameraID = r.URL.Query().Get("camera")
+		cameraID = r.URL.Query().Get("cameraId") // fallback for compatibility
 	}
 	if cameraID == "" {
-		http.Error(w, "Missing 'cameraId' parameter", http.StatusBadRequest)
+		http.Error(w, "Missing 'camera' parameter", http.StatusBadRequest)
 		return
 	}
 
@@ -550,13 +550,13 @@ func (s *Server) handleTimelineEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 轉換為 timeline 格式
+	// 轉換為 timeline 格式 (snake_case for iOS Codable)
 	type TimelineEvent struct {
-		RecordingID int64  `json:"recordingId"`
-		StartTs     int64  `json:"startTs"`
-		EndTs       int64  `json:"endTs"`
+		RecordingID int64  `json:"recording_id"`
+		StartTs     int64  `json:"start_ts"`
+		EndTs       int64  `json:"end_ts"`
 		Label       string `json:"label,omitempty"`
-		SizeBytes   int64  `json:"sizeBytes"`
+		SizeBytes   int64  `json:"size_bytes"`
 	}
 
 	events := make([]TimelineEvent, len(recordings))
