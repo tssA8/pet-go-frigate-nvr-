@@ -24,10 +24,11 @@ type Recorder struct {
 	stopCh      chan struct{}
 
 	// Motion detection
-	motionEnabled   bool
-	motionThreshold float64
-	motionCooldown  int
-	preRecordSecs   int
+	motionEnabled     bool
+	motionThreshold   float64
+	motionCooldown    int
+	preRecordSecs     int
+	continuousEnabled bool
 
 	mu              sync.Mutex
 	isRecording     bool
@@ -49,15 +50,16 @@ func NewRecorder(camera config.Camera, dataDir string, segmentTime int, db *inde
 // NewMotionRecorder 建立支援動態偵測的 Recorder
 func NewMotionRecorder(camera config.Camera, cfg *config.Config, db *index.DB) *Recorder {
 	return &Recorder{
-		camera:          camera,
-		dataDir:         cfg.DataDir,
-		segmentTime:     cfg.SegmentTime,
-		db:              db,
-		stopCh:          make(chan struct{}),
-		motionEnabled:   cfg.MotionEnabled,
-		motionThreshold: cfg.MotionThreshold,
-		motionCooldown:  cfg.MotionCooldown,
-		preRecordSecs:   cfg.PreRecordSecs,
+		camera:            camera,
+		dataDir:           cfg.DataDir,
+		segmentTime:       cfg.SegmentTime,
+		db:                db,
+		stopCh:            make(chan struct{}),
+		motionEnabled:     cfg.MotionEnabled,
+		motionThreshold:   cfg.MotionThreshold,
+		motionCooldown:    cfg.MotionCooldown,
+		preRecordSecs:     cfg.PreRecordSecs,
+		continuousEnabled: cfg.ContinuousEnabled,
 	}
 }
 
@@ -78,8 +80,16 @@ func (r *Recorder) Start(reconnectDelay time.Duration) {
 		return
 	}
 
-	// 連續錄影模式
-	r.startContinuousMode(outDir, reconnectDelay)
+	// 連續錄影模式 (如果啟用)
+	// 如果 ContinuousEnabled 為 false，則只等待外部觸發 (TriggerRecording)
+	if r.continuousEnabled {
+		r.startContinuousMode(outDir, reconnectDelay)
+	} else {
+		log.Printf("[%s] 連續錄影已停用 (等待事件觸發)", r.camera.ID)
+		// 仍然需要保持運行等待 stopCh
+		<-r.stopCh
+		log.Printf("[%s] Recorder 停止", r.camera.ID)
+	}
 }
 
 // startContinuousMode 連續錄影模式（原始邏輯）
@@ -231,13 +241,14 @@ func (r *Recorder) runFFmpegWithContext(ctx context.Context, outDir string) erro
 		"-hide_banner",
 		"-loglevel", "warning",
 		"-rtsp_transport", "tcp",
-		"-timeout", "5000000", // 5秒超時 (for TCP)
+		"-timeout", "5000000", // 5秒超時 (socket timeout)
 		"-i", r.camera.RTSPURL,
 		"-c", "copy", // 不轉碼
 		"-f", "segment",
 		"-segment_time", strconv.Itoa(r.segmentTime),
 		"-reset_timestamps", "1",
 		"-strftime", "1",
+		"-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof", // 正確寫法：傳遞給 segment 內部的 muxer
 		pattern,
 	}
 

@@ -29,6 +29,9 @@ type Config struct {
 	MotionCooldown  int     `json:"motion_cooldown"`  // 無動態後繼續錄影秒數
 	PreRecordSecs   int     `json:"pre_record_secs"`  // 動態前預錄秒數
 
+	// Recording Mode
+	ContinuousEnabled bool `json:"continuous_enabled"` // 是否啟用連續錄影
+
 	// Frigate AI Detection 設定
 	FrigateEnabled bool   `json:"frigate_enabled"` // 啟用 Frigate AI 偵測
 	MQTTBroker     string `json:"mqtt_broker"`     // MQTT Broker 位址 (e.g., "tcp://localhost:1883")
@@ -51,6 +54,9 @@ func DefaultConfig() *Config {
 		MotionThreshold: 0.005, // 極高敏感度 (適用穩定畫面)
 		MotionCooldown:  15,    // 無動態 15 秒後停止
 		PreRecordSecs:   5,     // 預錄 5 秒
+
+		// Recording Mode
+		ContinuousEnabled: false, // 預設關閉為事件錄影 (Event-Only)
 
 		// Frigate 預設值
 		FrigateEnabled: true,                   // 預設啟用 Frigate

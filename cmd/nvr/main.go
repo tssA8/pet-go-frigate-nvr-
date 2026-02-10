@@ -31,7 +31,7 @@ func main() {
 		{
 			ID:         "cam1",
 			Name:       "Brio 300",
-			RTSPURL:    "rtsp://127.0.0.1:8554/brio",
+			RTSPURL:    "rtsp://192.168.1.110:8554/brio",
 			StreamPath: "brio", // MediaMTX 路徑
 		},
 	}

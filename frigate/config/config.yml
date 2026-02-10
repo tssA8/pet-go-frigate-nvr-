@@ -9,11 +9,16 @@ cameras:
     enabled: true
     ffmpeg:
       inputs:
-        - path: rtsp://host.docker.internal:8554/brio
+        - path: rtsp://192.168.1.110:8554/brio
           roles: [detect]
     detect:
       enabled: true
       fps: 5
+
+objects:
+  track:
+    - person
+    - cat
 
 detectors:
   cpu1:
