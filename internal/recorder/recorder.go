@@ -342,6 +342,15 @@ func (r *Recorder) watchNewFiles(outDir string) {
 					continue
 				}
 
+				// 驗證檔案是否可播放 (使用 ffprobe)
+				fullPath := filepath.Join(outDir, entry.Name())
+				if err := validateMediaFile(fullPath); err != nil {
+					log.Printf("[%s] 檔案損壞，跳過索引並刪除: %s (%v)", r.camera.ID, entry.Name(), err)
+					os.Remove(fullPath)       // 刪除壞檔
+					seen[entry.Name()] = true // 標記為已處理，避免重複嘗試
+					continue
+				}
+
 				// 計算結束時間（開始時間 + 段長）
 				endTime := startTime.Add(time.Duration(r.segmentTime) * time.Second)
 
@@ -362,4 +371,13 @@ func (r *Recorder) watchNewFiles(outDir string) {
 			}
 		}
 	}
+}
+
+// validateMediaFile 使用 ffprobe 檢查檔案是否有效
+func validateMediaFile(path string) error {
+	cmd := exec.Command("ffprobe", "-v", "error", path)
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
 }

@@ -468,8 +468,14 @@ func (s *Server) handlePlaybackByTimestamp(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 轉換為秒（DB 使用秒級時間戳）
-	tsSec := tsMs / 1000
+	// Smart Detection: 如果數值小於 10^11 (e.g. 17xxxxxxxx)，當作秒；否則當作毫秒
+	var tsSec int64
+	if tsMs < 100000000000 {
+		tsSec = tsMs
+		tsMs = tsSec * 1000 // standardize tsMs for offset calculation
+	} else {
+		tsSec = tsMs / 1000
+	}
 
 	// 查詢對應的錄影片段
 	rec, err := s.db.FindRecordingByTimestamp(cameraID, tsSec)
@@ -538,9 +544,19 @@ func (s *Server) handleTimelineEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 轉換為秒
-	fromSec := fromMs / 1000
-	toSec := toMs / 1000
+	// Smart Detection: 如果數值小於 10^11 (e.g. 17xxxxxxxx)，當作秒；否則當作毫秒
+	var fromSec, toSec int64
+	if fromMs < 100000000000 { // 1000億 (1973年 in ms, or 3365年 in sec) -> 判定為秒
+		fromSec = fromMs
+	} else {
+		fromSec = fromMs / 1000
+	}
+
+	if toMs < 100000000000 {
+		toSec = toMs
+	} else {
+		toSec = toMs / 1000
+	}
 
 	// 查詢該時間範圍的錄影（作為 timeline blocks）
 	recordings, err := s.db.QueryRecordings(cameraID, fromSec, toSec)
