@@ -1,0 +1,21 @@
+# MediaMTX HLS 配置
+# 優化 iOS 串流延遲
+
+# 明確啟用 HLS
+hls: yes
+hlsAddress: :8888
+
+# HLS 設定 - 使用 fmp4 變體 (比 mpegts 更低延遲，但不需要 TLS)
+# HLS 設定 - 使用預設 (fmp4, low latency)
+# hlsVariant: mpegts
+# hlsSegmentCount: 3
+# hlsSegmentDuration: 2s
+# hlsAlwaysRemux: true
+
+# 路徑設定
+paths:
+  all_others:
+  brio:
+    source: publisher
+    runOnInit: ffmpeg -i rtsp://192.168.1.110:8554/brio -c copy -f rtsp rtsp://localhost:8554/brio
+    runOnInitRestart: yes
