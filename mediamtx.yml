@@ -6,11 +6,16 @@ hls: yes
 hlsAddress: :8888
 
 # HLS 設定 - 使用 fmp4 變體 (比 mpegts 更低延遲，但不需要 TLS)
-hlsVariant: mpegts
-hlsSegmentCount: 3           # 保留的 segment 數量
-hlsSegmentDuration: 2s       # segment 長度 (2秒)
-hlsAlwaysRemux: true         # 確保一直生成 HLS
+# HLS 設定 - 使用預設 (fmp4, low latency)
+# hlsVariant: mpegts
+# hlsSegmentCount: 3
+# hlsSegmentDuration: 2s
+# hlsAlwaysRemux: true
 
 # 路徑設定
 paths:
   all_others:
+  brio:
+    source: rtsp://192.168.1.110:8554/brio
+    rtspTransport: tcp
+    sourceOnDemand: yes
