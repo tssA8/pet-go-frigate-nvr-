@@ -18,3 +18,5 @@ mediamtx.yml
 *.log
 *.tmp
 .DS_Store
+frigate/media/
+mediamtx.log
