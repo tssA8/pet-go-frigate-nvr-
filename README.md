@@ -28,28 +28,33 @@ graph TD
 ## 📦 Installation
 
 ### Prerequisites
-- **Go 1.21+**
-- **FFmpeg** (`brew install ffmpeg`)
-- **MediaMTX** (`brew install mediamtx`)
+Run this one-liner to install all dependencies (Go, FFmpeg, MediaMTX):
+```bash
+brew install go ffmpeg mediamtx
+```
 
-### Setup
+### Setup Guide
 1.  **Clone the repository**:
     ```bash
     git clone https://github.com/tssA8/pet-go-frigate-nvr-.git
     cd pet-go-frigate-nvr-
     ```
 
-2.  **Configure MediaMTX**:
-    Copy the example configuration:
-    ```bash
-    cp mediamtx.example.yml mediamtx.yml
-    # Edit mediamtx.yml to set your RTSP source IP
-    ```
+2.  **Configure IP Addresses (CRITICAL)**:
+    Since the camera source is on another machine (e.g., iMac), you must update the IP address in **two** places:
 
-3.  **Configure Frigate**:
-    Set up `frigate/config/config.yml` (see `config.example.yml`).
+    *   **MediaMTX (`mediamtx.yml`)**:
+        ```bash
+        cp mediamtx.example.yml mediamtx.yml
+        # Open mediamtx.yml and replace YOUR_IMAC_IP with the actual IP (e.g., 192.168.1.110)
+        ```
+    *   **Frigate (`frigate/config/config.yml`)**:
+        ```bash
+        cp frigate/config/config.example.yml frigate/config/config.yml
+        # Open config.yml and replace YOUR_IMAC_IP with the actual IP
+        ```
 
-4.  **Run the NVR**:
+3.  **Run the NVR**:
     ```bash
     go run cmd/nvr/main.go
     ```
