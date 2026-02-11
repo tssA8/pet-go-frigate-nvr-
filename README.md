@@ -46,7 +46,7 @@ brew install go ffmpeg mediamtx
     *   **MediaMTX (`mediamtx.yml`)**:
         ```bash
         cp mediamtx.example.yml mediamtx.yml
-        # Open mediamtx.yml and replace YOUR_IMAC_IP with the actual IP (e.g., 192.168.1.110)
+        # Open mediamtx.yml and replace YOUR_IMAC_IP with the actual IP (e.g., 192.168.1.x)
         ```
     *   **Frigate (`frigate/config/config.yml`)**:
         ```bash
