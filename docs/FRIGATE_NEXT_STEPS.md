@@ -41,7 +41,7 @@
 
 ```bash
 # Start
-cd /Users/peter/.gemini/antigravity/scratch/nvr
+cd <PROJECT_DIR>
 docker compose up -d
 
 # Health check

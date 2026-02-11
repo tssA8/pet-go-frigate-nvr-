@@ -16,6 +16,6 @@ hlsAddress: :8888
 paths:
   all_others:
   brio:
-    source: rtsp://192.168.1.110:8554/brio
+    source: rtsp://<YOUR_CAMERA_IP>:8554/brio
     rtspTransport: tcp
 

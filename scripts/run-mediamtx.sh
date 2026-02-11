@@ -3,7 +3,7 @@
 # MediaMTX v1.16.0 has a known panic bug (integer divide by zero in gortsplib v5.3.0)
 # This script automatically restarts it on crash
 
-CONFIG="${1:-/Users/peter/mediamtx.yml}"
+CONFIG="${1:-$(dirname "$0")/../mediamtx.yml}"
 LOG_DIR="$(dirname "$0")/../mediamtx.log"
 
 echo "Starting MediaMTX with config: $CONFIG"
