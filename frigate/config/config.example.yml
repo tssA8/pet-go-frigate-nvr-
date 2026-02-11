@@ -9,7 +9,7 @@ cameras:
     enabled: true
     ffmpeg:
       inputs:
-        - path: rtsp://192.168.1.110:8554/brio
+        - path: rtsp://YOUR_IMAC_IP:8554/brio
           roles: [detect]
     detect:
       enabled: true
