@@ -18,4 +18,4 @@ paths:
   brio:
     source: rtsp://192.168.1.110:8554/brio
     rtspTransport: tcp
-    sourceOnDemand: yes
+
